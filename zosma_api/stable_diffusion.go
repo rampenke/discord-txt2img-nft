@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/hibiken/asynq"
 
@@ -40,7 +39,7 @@ func waitForResult(ctx context.Context, i *asynq.Inspector, queue, taskID string
 			}
 			return taskInfo, nil
 		case <-ctx.Done():
-			return nil, fmt.Errorf("context closed")
+			return nil, ctx.Err()
 		}
 	}
 }
@@ -82,23 +81,27 @@ func (api *apiImpl) TextToImage(_request *stable_diffusion_api.TextToImageReques
 	}
 	task, err := tasks.NewTxt2imgTask(request)
 	if err != nil {
-		log.Fatalf("could not create task: %v", err)
+		log.Printf("could not create task: %v", err)
+		return nil, err
 	}
 	info, err := client.Enqueue(task, asynq.MaxRetry(10), asynq.Timeout(3*time.Minute), asynq.Retention(2*time.Hour))
 	if err != nil {
-		log.Fatalf("could not enqueue task: %v", err)
+		log.Printf("could not enqueue task: %v", err)
+		return nil, err
 	}
 	log.Printf("enqueued task: id=%s queue=%s", info.ID, info.Queue)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel()
 	res, err := waitForResult(ctx, inspector, "default", info.ID)
 	if err != nil {
-		log.Fatalf("unable to wait for resilt: %v", err)
+		log.Printf("unable to wait for result: %v", err)
+		return nil, err
 	}
 	var respStruct = &tasks.TextToImageResponse{}
 	err = json.Unmarshal(res.Result, respStruct)
 	if err != nil {
-		log.Fatalf("Unexpected API response: %v", err)
+		log.Printf("Unexpected API response: %v", err)
+		return nil, err
 	}
 
 	return &stable_diffusion_api.TextToImageResponse{
