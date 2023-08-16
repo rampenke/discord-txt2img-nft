@@ -25,7 +25,6 @@ type msgQueueImpl struct {
 	botSession         *discordgo.Session
 	stableDiffusionAPI stable_diffusion_api.StableDiffusionAPI
 	queue              chan *QueueItem
-	currentTxt2Img     *QueueItem
 	mu                 sync.Mutex
 }
 
@@ -58,9 +57,9 @@ func (q *msgQueueImpl) StartPolling(botSession *discordgo.Session) {
 		case <-stop:
 			stopPolling = true
 		case <-time.After(1 * time.Second):
-			//log.Info("Polling for msg")newGeneration
-			if q.currentTxt2Img == nil {
-				q.pullNextInQueue()
+			item := q.pullNextInQueue()
+			if item != nil {
+				q.processTxt2Img(item)
 			}
 		}
 
@@ -71,28 +70,21 @@ func (q *msgQueueImpl) StartPolling(botSession *discordgo.Session) {
 	log.Printf("Polling stopped...\n")
 }
 
-func (q *msgQueueImpl) pullNextInQueue() {
+func (q *msgQueueImpl) pullNextInQueue() *QueueItem {
 	if len(q.queue) > 0 {
 		element := <-q.queue
 
 		q.mu.Lock()
 		defer q.mu.Unlock()
 
-		q.currentTxt2Img = element
-
-		q.processCurrentTxt2Img()
+		return element
 	}
+	return nil
 }
 
-func (q *msgQueueImpl) processCurrentTxt2Img() {
+func (q *msgQueueImpl) processTxt2Img(item *QueueItem) {
 	go func() {
-		defer func() {
-			q.mu.Lock()
-			defer q.mu.Unlock()
-
-			q.currentTxt2Img = nil
-		}()
-
+		currentTxt2Img := item
 		enableHR := false
 		// TODO: Configure
 		defaultWidth := 512
@@ -102,7 +94,7 @@ func (q *msgQueueImpl) processCurrentTxt2Img() {
 
 		// new generation with defaults
 		newGeneration := &model.Txt2img{
-			Prompt: q.currentTxt2Img.Prompt,
+			Prompt: currentTxt2Img.Prompt,
 			NegativePrompt: "ugly, tiling, poorly drawn hands, poorly drawn feet, poorly drawn face, out of frame, " +
 				"mutation, mutated, extra limbs, extra legs, extra arms, disfigured, deformed, cross-eye, " +
 				"body out of frame, blurry, bad art, bad anatomy, blurred, text, watermark, grainy",
@@ -122,7 +114,7 @@ func (q *msgQueueImpl) processCurrentTxt2Img() {
 			Processed:         false,
 		}
 
-		err := q.processTxt2img(newGeneration, q.currentTxt2Img)
+		err := q.processTxt2img(newGeneration, currentTxt2Img)
 		if err != nil {
 			log.Printf("Error processing imagine grid: %v", err)
 
